@@ -1,0 +1,2 @@
+[console_scripts]
+motor_driver = mobile_base_controller.motor_driver:main

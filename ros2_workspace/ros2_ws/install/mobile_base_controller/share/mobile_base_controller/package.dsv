@@ -1,0 +1,6 @@
+source;share/mobile_base_controller/hook/pythonpath.ps1
+source;share/mobile_base_controller/hook/pythonpath.dsv
+source;share/mobile_base_controller/hook/pythonpath.sh
+source;share/mobile_base_controller/hook/ament_prefix_path.ps1
+source;share/mobile_base_controller/hook/ament_prefix_path.dsv
+source;share/mobile_base_controller/hook/ament_prefix_path.sh
