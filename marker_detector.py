@@ -1,5 +1,4 @@
 import cv2
-import math
 import numpy as np
 
 class MarkerDetector:
@@ -39,7 +38,6 @@ class MarkerDetector:
 
     def detect(self, image):
 
-        annotated = image.copy()
          # OpenCV 4.7+ uses ArucoDetector class instead of detectMarkers function
         try:
             # Try new API (OpenCV 4.7+)
@@ -66,7 +64,7 @@ class MarkerDetector:
         img_points = corners[0].reshape(-1, 2)
 
 
-        rvec, tvec = cv2.solvePnP(
+        retval, rvec, tvec = cv2.solvePnP(
                     obj_points,
                     img_points,
                     self.camera_matrix,
@@ -76,7 +74,7 @@ class MarkerDetector:
         rvec = rvec.flatten()
         
         detections.append({
-            "id": ids[0],
+            "id": int(ids[0]),
             "tvec": tvec,
             "rvec": rvec,
             "corners": corners[0]
