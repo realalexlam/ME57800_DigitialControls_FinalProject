@@ -2,7 +2,7 @@ import cv2
 from marker_detector import MarkerDetector
 
 def main():
-    # Open default camera (0 = first webcam)
+    # Open default camera    (0 = first webcam)
     
     cap = cv2.VideoCapture(0)
 
@@ -39,7 +39,7 @@ def main():
 
         if cv2.waitKey(1) & 0xFF == 27:  # ESC key
             break 
-        
+
     out.release()
     cap.release()
     cv2.destroyAllWindows()
