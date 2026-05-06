@@ -1,15 +1,13 @@
-import math
 import glob
+import math
 import threading
 from dataclasses import dataclass
 from typing import Optional
 
+from geometry_msgs.msg import PoseStamped, Twist
 import rclpy
 from rclpy.node import Node
-
-from geometry_msgs.msg import Twist, PoseStamped
 from sensor_msgs.msg import JointState
-
 import serial
 
 
@@ -48,11 +46,6 @@ def find_tty_acm() -> str:
 
 @dataclass
 class DiscretePI:
-    """
-    Discrete PI controller:
-        I[k] = I[k-1] + Ts * e[k]
-        u[k] = Kp * e[k] + Ki * I[k] + Kff * ref[k]
-    """
     kp: float
     ki: float
     kff: float = 0.0
@@ -73,7 +66,6 @@ class DiscretePI:
         u_unsat = self.kp * error + self.ki * i_new + self.kff * ref
         u = clamp(u_unsat, umin, umax)
 
-        # Simple anti-windup: only accept integral update if not saturated
         if abs(u_unsat - u) < 1e-9:
             self.integral = i_new
 
@@ -81,147 +73,81 @@ class DiscretePI:
 
 
 class CascadeTagStraighteningController(Node):
-    """
-    RPM-mismatch-only test version.
-
-    Camera/tag correction is ignored for now.
-    Steering correction is based ONLY on wheel RPM mismatch.
-    Correction is OFF whenever either wheel is within +/-5 RPM.
-
-    Flow:
-        /cmd_vel
-          -> base motion command
-          -> RPM-balance steering correction
-          -> wheel-speed references
-          -> left/right PI wheel controllers
-          -> serial motor commands
-    """
-
     def __init__(self) -> None:
         super().__init__("cascade_tag_straightening_controller")
 
-        # ------------------------------------------------------------------
-        # Parameters
-        # ------------------------------------------------------------------
         self.declare_parameter("port", "")
         self.declare_parameter("baudrate", 115200)
         self.declare_parameter("serial_timeout", 0.05)
-
         self.declare_parameter("control_hz", 30.0)
-
         self.declare_parameter("cmd_timeout_sec", 0.5)
-        self.declare_parameter("tag_timeout_sec", 0.3)   # kept for compatibility
+        self.declare_parameter("tag_timeout_sec", 0.3)
         self.declare_parameter("wheel_timeout_sec", 0.3)
-
-        # Robot geometry
-        self.declare_parameter("wheel_radius", 0.05)   # meters
-        self.declare_parameter("track_width", 0.28)    # meters
-
-        # Joint names from /joint_states
+        self.declare_parameter("wheel_radius", 0.05)
+        self.declare_parameter("track_width", 0.28)
         self.declare_parameter("left_joint_name", "left_wheel_joint")
         self.declare_parameter("right_joint_name", "right_wheel_joint")
-
-        # ------------------------------------------------------------------
-        # Camera params kept only for compatibility with existing YAML/launch
-        # They are NOT used in control_step() for this RPM-only test.
-        # ------------------------------------------------------------------
         self.declare_parameter("k_heading", 0.0)
         self.declare_parameter("k_lateral", 0.0)
-        self.declare_parameter("heading_deadband", 0.03)        # rad
-        self.declare_parameter("lateral_deadband", 0.01)        # m
+        self.declare_parameter("heading_deadband", 0.03)
+        self.declare_parameter("lateral_deadband", 0.01)
         self.declare_parameter("invert_tag_x", False)
         self.declare_parameter("invert_tag_yaw", False)
-
-        # ------------------------------------------------------------------
-        # RPM-balance-only correction (from tuning)
-        # ------------------------------------------------------------------
         self.declare_parameter("k_rpm_balance", 1.346468)
         self.declare_parameter("rpm_balance_deadband", 0.005353)
-        self.declare_parameter("rpm_ignore_threshold", 5.0)     # OFF if either wheel is within +/-5 RPM
-
-        # What units /joint_states velocity uses:
-        #   "rad_s"  -> standard ROS wheel speed in rad/s (default)
-        #   "rpm"    -> if your /joint_states velocity is already RPM
+        self.declare_parameter("rpm_ignore_threshold", 5.0)
         self.declare_parameter("encoder_units", "rad_s")
-
-        # Deadbands
-        self.declare_parameter("encoder_deadband", 0.05)        # rad/s
-        self.declare_parameter("wheel_error_deadband", 0.05)    # rad/s
-        self.declare_parameter("motor_cmd_deadband", 20.0)      # driver units
-
-        # Inner-loop PI gains
+        self.declare_parameter("encoder_deadband", 0.05)
+        self.declare_parameter("wheel_error_deadband", 0.05)
+        self.declare_parameter("motor_cmd_deadband", 20.0)
         self.declare_parameter("kp_left", 25.0)
         self.declare_parameter("ki_left", 6.0)
         self.declare_parameter("kff_left", 0.0)
-
         self.declare_parameter("kp_right", 25.0)
         self.declare_parameter("ki_right", 6.0)
         self.declare_parameter("kff_right", 0.0)
-
-        # Motor command limit
         self.declare_parameter("motor_cmd_limit", 3000.0)
-
-        # Sign convention parameters
         self.declare_parameter("invert_left_encoder", False)
         self.declare_parameter("invert_right_encoder", False)
+        self.declare_parameter("max_steering_correction", 0.269290)
+        self.declare_parameter("max_forward_speed", 1.0)
+        self.declare_parameter("max_user_yaw_rate", 2.0)
 
-        # Optional command shaping
-        self.declare_parameter("max_steering_correction", 0.269290)  # rad/s
-        self.declare_parameter("max_forward_speed", 1.0)             # m/s
-        self.declare_parameter("max_user_yaw_rate", 2.0)             # rad/s
-
-        # ------------------------------------------------------------------
-        # Read parameters
-        # ------------------------------------------------------------------
         port_param = str(self.get_parameter("port").value)
         self.port = port_param if port_param else find_tty_acm()
         self.baudrate = int(self.get_parameter("baudrate").value)
         self.serial_timeout = float(self.get_parameter("serial_timeout").value)
-
         self.control_hz = float(self.get_parameter("control_hz").value)
         self.Ts = 1.0 / self.control_hz
-
         self.cmd_timeout_sec = float(self.get_parameter("cmd_timeout_sec").value)
         self.tag_timeout_sec = float(self.get_parameter("tag_timeout_sec").value)
         self.wheel_timeout_sec = float(self.get_parameter("wheel_timeout_sec").value)
-
         self.r = float(self.get_parameter("wheel_radius").value)
         self.L = float(self.get_parameter("track_width").value)
-
         self.left_joint_name = str(self.get_parameter("left_joint_name").value)
         self.right_joint_name = str(self.get_parameter("right_joint_name").value)
-
-        # camera params read but unused in control_step()
         self.k_heading = float(self.get_parameter("k_heading").value)
         self.k_lateral = float(self.get_parameter("k_lateral").value)
         self.heading_deadband = float(self.get_parameter("heading_deadband").value)
         self.lateral_deadband = float(self.get_parameter("lateral_deadband").value)
         self.invert_tag_x = bool(self.get_parameter("invert_tag_x").value)
         self.invert_tag_yaw = bool(self.get_parameter("invert_tag_yaw").value)
-
-        # RPM-balance params
         self.k_rpm_balance = float(self.get_parameter("k_rpm_balance").value)
         self.rpm_balance_deadband = float(self.get_parameter("rpm_balance_deadband").value)
         self.rpm_ignore_threshold = float(self.get_parameter("rpm_ignore_threshold").value)
         self.encoder_units = str(self.get_parameter("encoder_units").value).strip().lower()
-
         self.encoder_deadband = float(self.get_parameter("encoder_deadband").value)
         self.wheel_error_deadband = float(self.get_parameter("wheel_error_deadband").value)
         self.motor_cmd_deadband = float(self.get_parameter("motor_cmd_deadband").value)
-
         kp_left = float(self.get_parameter("kp_left").value)
         ki_left = float(self.get_parameter("ki_left").value)
         kff_left = float(self.get_parameter("kff_left").value)
-
         kp_right = float(self.get_parameter("kp_right").value)
         ki_right = float(self.get_parameter("ki_right").value)
         kff_right = float(self.get_parameter("kff_right").value)
-
         self.motor_cmd_limit = float(self.get_parameter("motor_cmd_limit").value)
-
         self.invert_left_encoder = bool(self.get_parameter("invert_left_encoder").value)
         self.invert_right_encoder = bool(self.get_parameter("invert_right_encoder").value)
-
         self.max_steering_correction = float(self.get_parameter("max_steering_correction").value)
         self.max_forward_speed = float(self.get_parameter("max_forward_speed").value)
         self.max_user_yaw_rate = float(self.get_parameter("max_user_yaw_rate").value)
@@ -229,51 +155,28 @@ class CascadeTagStraighteningController(Node):
         if self.encoder_units not in ("rad_s", "rpm"):
             raise ValueError("encoder_units must be 'rad_s' or 'rpm'")
 
-        # ------------------------------------------------------------------
-        # Controllers
-        # ------------------------------------------------------------------
         self.left_pi = DiscretePI(kp=kp_left, ki=ki_left, kff=kff_left)
         self.right_pi = DiscretePI(kp=kp_right, ki=ki_right, kff=kff_right)
 
-        # ------------------------------------------------------------------
-        # State
-        # ------------------------------------------------------------------
         self.v_cmd = 0.0
         self.omega_cmd = 0.0
-
-        # camera state kept for compatibility only
         self.tag_x = 0.0
         self.tag_yaw = 0.0
-
-        # wheel speeds used by PI loops [rad/s]
         self.w_left = 0.0
         self.w_right = 0.0
-
-        # same wheel speeds represented in RPM for mismatch control
         self.left_rpm = 0.0
         self.right_rpm = 0.0
-
         self.last_cmd_time: Optional[float] = None
         self.last_tag_time: Optional[float] = None
         self.last_wheel_time: Optional[float] = None
 
-        # ------------------------------------------------------------------
-        # Serial interface
-        # ------------------------------------------------------------------
         self.lock = threading.Lock()
         self.ser = None
         self.connect_serial()
 
-        # ------------------------------------------------------------------
-        # ROS interfaces
-        # ------------------------------------------------------------------
         self.create_subscription(Twist, "/cmd_vel", self.cmd_callback, 10)
-
-        # kept only for compatibility; not used in control_step()
         self.create_subscription(PoseStamped, "/tag_pose", self.tag_callback, 10)
-
         self.create_subscription(JointState, "/joint_states", self.joint_callback, 20)
-
         self.timer = self.create_timer(self.Ts, self.control_step)
 
         self.get_logger().info(f"Controller started on port {self.port}")
@@ -286,15 +189,9 @@ class CascadeTagStraighteningController(Node):
             f"encoder_units={self.encoder_units}"
         )
 
-    # ----------------------------------------------------------------------
-    # Utility
-    # ----------------------------------------------------------------------
     def now_sec(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
 
-    # ----------------------------------------------------------------------
-    # Serial I/O
-    # ----------------------------------------------------------------------
     def connect_serial(self) -> None:
         try:
             self.ser = serial.Serial(
@@ -306,10 +203,7 @@ class CascadeTagStraighteningController(Node):
                 timeout=self.serial_timeout,
             )
             self.get_logger().info(f"Connected to {self.port}")
-
-            # Keeps the same startup pattern as your existing driver code
             self.send_data("^RWD 30000\r")
-
         except Exception as e:
             self.get_logger().error(f"Could not open serial port {self.port}: {e}")
             self.ser = None
@@ -327,7 +221,6 @@ class CascadeTagStraighteningController(Node):
                 self.get_logger().error("Serial port not open")
 
     def vel_control(self, left_cmd: float, right_cmd: float) -> None:
-        # Motor command deadband
         if abs(left_cmd) < self.motor_cmd_deadband:
             left_cmd = 0.0
         if abs(right_cmd) < self.motor_cmd_deadband:
@@ -339,19 +232,12 @@ class CascadeTagStraighteningController(Node):
         self.send_data(f"!S 1 {left_cmd}\r")
         self.send_data(f"!S 2 {right_cmd}\r")
 
-    # ----------------------------------------------------------------------
-    # ROS callbacks
-    # ----------------------------------------------------------------------
     def cmd_callback(self, msg: Twist) -> None:
         self.v_cmd = clamp(msg.linear.x, -self.max_forward_speed, self.max_forward_speed)
         self.omega_cmd = clamp(msg.angular.z, -self.max_user_yaw_rate, self.max_user_yaw_rate)
         self.last_cmd_time = self.now_sec()
 
     def tag_callback(self, msg: PoseStamped) -> None:
-        """
-        Kept for compatibility only.
-        Tag data is currently ignored in control_step().
-        """
         x = msg.pose.position.x
         yaw = quat_to_yaw(
             msg.pose.orientation.x,
@@ -392,19 +278,16 @@ class CascadeTagStraighteningController(Node):
             wr_raw = -wr_raw
 
         if self.encoder_units == "rpm":
-            # incoming /joint_states are already RPM
             self.left_rpm = wl_raw
             self.right_rpm = wr_raw
             wl = rpm_to_rad_s(wl_raw)
             wr = rpm_to_rad_s(wr_raw)
         else:
-            # incoming /joint_states are rad/s
             wl = wl_raw
             wr = wr_raw
             self.left_rpm = rad_s_to_rpm(wl_raw)
             self.right_rpm = rad_s_to_rpm(wr_raw)
 
-        # Encoder deadband
         if abs(wl) < self.encoder_deadband:
             wl = 0.0
         if abs(wr) < self.encoder_deadband:
@@ -414,9 +297,6 @@ class CascadeTagStraighteningController(Node):
         self.w_right = wr
         self.last_wheel_time = self.now_sec()
 
-    # ----------------------------------------------------------------------
-    # Safety
-    # ----------------------------------------------------------------------
     def reset_controllers(self) -> None:
         self.left_pi.reset()
         self.right_pi.reset()
@@ -425,34 +305,23 @@ class CascadeTagStraighteningController(Node):
         self.reset_controllers()
         self.vel_control(0.0, 0.0)
 
-    # ----------------------------------------------------------------------
-    # Main control loop
-    # ----------------------------------------------------------------------
     def control_step(self) -> None:
         t_now = self.now_sec()
 
-        # Fresh operator command required
         if self.last_cmd_time is None or (t_now - self.last_cmd_time) > self.cmd_timeout_sec:
             self.stop_robot()
             return
 
-        # Fresh wheel feedback required
         if self.last_wheel_time is None or (t_now - self.last_wheel_time) > self.wheel_timeout_sec:
             self.get_logger().warn("Wheel feedback stale; stopping robot")
             self.stop_robot()
             return
 
-        # ==============================================================
-        # RPM-balance-only correction
-        # Ignore camera entirely for this test.
-        # Controller OFF whenever either wheel is within +/-5 RPM.
-        # ==============================================================
         if abs(self.left_rpm) <= self.rpm_ignore_threshold or abs(self.right_rpm) <= self.rpm_ignore_threshold:
             e_rpm = 0.0
         else:
             rpm_avg = max((abs(self.left_rpm) + abs(self.right_rpm)) / 2.0, 1.0)
             e_rpm = (self.right_rpm - self.left_rpm) / rpm_avg
-
             if abs(e_rpm) < self.rpm_balance_deadband:
                 e_rpm = 0.0
 
@@ -462,23 +331,14 @@ class CascadeTagStraighteningController(Node):
             -self.max_steering_correction,
             self.max_steering_correction,
         )
-
-        # background correction added to user command
         omega_ref = self.omega_cmd - steering_corr
 
-        # ==============================================================
-        # Reference generation (diff-drive inverse kinematics)
-        # ==============================================================
         w_left_ref = (self.v_cmd - 0.5 * self.L * omega_ref) / self.r
         w_right_ref = (self.v_cmd + 0.5 * self.L * omega_ref) / self.r
 
-        # ==============================================================
-        # Inner loops: wheel speed control
-        # ==============================================================
         e_left = w_left_ref - self.w_left
         e_right = w_right_ref - self.w_right
 
-        # Wheel-error deadband
         if abs(e_left) < self.wheel_error_deadband:
             e_left = 0.0
         if abs(e_right) < self.wheel_error_deadband:
@@ -491,7 +351,6 @@ class CascadeTagStraighteningController(Node):
             umin=-self.motor_cmd_limit,
             umax=self.motor_cmd_limit,
         )
-
         u_right = self.right_pi.update(
             error=e_right,
             ref=w_right_ref,
@@ -500,9 +359,6 @@ class CascadeTagStraighteningController(Node):
             umax=self.motor_cmd_limit,
         )
 
-        # ==============================================================
-        # Final actuation
-        # ==============================================================
         self.vel_control(u_left, u_right)
 
     def destroy_node(self):

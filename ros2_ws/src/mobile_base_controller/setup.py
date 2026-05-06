@@ -11,7 +11,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'pyserial'],
     zip_safe=True,
     maintainer='lamm-robot',
     maintainer_email='lamm-robot@todo.todo',
@@ -24,7 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'motor_driver = mobile_base_controller.motor_driver:main'
+            'motor_driver = mobile_base_controller.motor_driver:main',
+            'straightening_controller = mobile_base_controller.controller:main',
         ],
     },
 )
