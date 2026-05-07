@@ -23,12 +23,6 @@ def wrap_to_pi(angle: float) -> float:
     return angle
 
 
-def quat_to_yaw(x: float, y: float, z: float, w: float) -> float:
-    siny_cosp = 2.0 * (w * z + x * y)
-    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    return math.atan2(siny_cosp, cosy_cosp)
-
-
 def rad_s_to_rpm(rad_s: float) -> float:
     return rad_s * 60.0 / (2.0 * math.pi)
 
@@ -87,12 +81,14 @@ class CascadeTagStraighteningController(Node):
         self.declare_parameter("track_width", 0.28)
         self.declare_parameter("left_joint_name", "left_wheel_joint")
         self.declare_parameter("right_joint_name", "right_wheel_joint")
-        self.declare_parameter("k_heading", 0.0)
-        self.declare_parameter("k_lateral", 0.0)
-        self.declare_parameter("heading_deadband", 0.03)
-        self.declare_parameter("lateral_deadband", 0.01)
+        self.declare_parameter("k_heading", 0.896413)
+        self.declare_parameter("k_lateral", 1.000012)
+        self.declare_parameter("heading_deadband", 0.015866)
+        self.declare_parameter("lateral_deadband", 0.001035)
         self.declare_parameter("invert_tag_x", False)
         self.declare_parameter("invert_tag_yaw", False)
+        self.declare_parameter("camera_filter_alpha", 0.25)
+        self.declare_parameter("tag_fade_start_sec", 0.15)
         self.declare_parameter("k_rpm_balance", 1.346468)
         self.declare_parameter("rpm_balance_deadband", 0.005353)
         self.declare_parameter("rpm_ignore_threshold", 5.0)
@@ -111,9 +107,11 @@ class CascadeTagStraighteningController(Node):
         self.declare_parameter("motor_cmd_limit", 3000.0)
         self.declare_parameter("invert_left_encoder", False)
         self.declare_parameter("invert_right_encoder", False)
-        self.declare_parameter("max_steering_correction", 0.269290)
+        self.declare_parameter("max_steering_correction", 1.785322)
         self.declare_parameter("max_forward_speed", 1.0)
         self.declare_parameter("max_user_yaw_rate", 2.0)
+        self.declare_parameter("straight_assist_min_speed", 0.05)
+        self.declare_parameter("straight_assist_yaw_threshold", 0.15)
 
         port_param = str(self.get_parameter("port").value)
         self.port = port_param if port_param else find_tty_acm()
@@ -134,6 +132,8 @@ class CascadeTagStraighteningController(Node):
         self.lateral_deadband = float(self.get_parameter("lateral_deadband").value)
         self.invert_tag_x = bool(self.get_parameter("invert_tag_x").value)
         self.invert_tag_yaw = bool(self.get_parameter("invert_tag_yaw").value)
+        self.camera_filter_alpha = float(self.get_parameter("camera_filter_alpha").value)
+        self.tag_fade_start_sec = float(self.get_parameter("tag_fade_start_sec").value)
         self.k_rpm_balance = float(self.get_parameter("k_rpm_balance").value)
         self.rpm_balance_deadband = float(self.get_parameter("rpm_balance_deadband").value)
         self.rpm_ignore_threshold = float(self.get_parameter("rpm_ignore_threshold").value)
@@ -153,9 +153,15 @@ class CascadeTagStraighteningController(Node):
         self.max_steering_correction = float(self.get_parameter("max_steering_correction").value)
         self.max_forward_speed = float(self.get_parameter("max_forward_speed").value)
         self.max_user_yaw_rate = float(self.get_parameter("max_user_yaw_rate").value)
+        self.straight_assist_min_speed = float(self.get_parameter("straight_assist_min_speed").value)
+        self.straight_assist_yaw_threshold = float(self.get_parameter("straight_assist_yaw_threshold").value)
 
         if self.encoder_units not in ("rad_s", "rpm"):
             raise ValueError("encoder_units must be 'rad_s' or 'rpm'")
+        if not 0.0 < self.camera_filter_alpha <= 1.0:
+            raise ValueError("camera_filter_alpha must be in (0, 1]")
+        if not 0.0 <= self.tag_fade_start_sec <= self.tag_timeout_sec:
+            raise ValueError("tag_fade_start_sec must be between 0 and tag_timeout_sec")
 
         self.left_pi = DiscretePI(kp=kp_left, ki=ki_left, kff=kff_left)
         self.right_pi = DiscretePI(kp=kp_right, ki=ki_right, kff=kff_right)
@@ -163,7 +169,12 @@ class CascadeTagStraighteningController(Node):
         self.v_cmd = 0.0
         self.omega_cmd = 0.0
         self.tag_x = 0.0
+        self.tag_z = 0.0
         self.tag_yaw = 0.0
+        self.tag_x_ref = 0.0
+        self.tag_yaw_ref = 0.0
+        self.tag_ref_valid = False
+        self.was_straight_assist_enabled = False
         self.w_left = 0.0
         self.w_right = 0.0
         self.left_rpm = 0.0
@@ -183,10 +194,18 @@ class CascadeTagStraighteningController(Node):
 
         self.get_logger().info(f"Controller started on port {self.port}")
         self.get_logger().info(
-            f"RPM-only correction active: "
+            f"Camera+RPM straight-line correction active: "
+            f"k_heading={self.k_heading:.6f}, "
+            f"k_lateral={self.k_lateral:.6f}, "
             f"k_rpm_balance={self.k_rpm_balance:.6f}, "
+            f"heading_deadband={self.heading_deadband:.6f}, "
+            f"lateral_deadband={self.lateral_deadband:.6f}, "
             f"rpm_balance_deadband={self.rpm_balance_deadband:.6f}, "
             f"rpm_ignore_threshold={self.rpm_ignore_threshold:.1f}, "
+            f"tag_timeout_sec={self.tag_timeout_sec:.2f}, "
+            f"tag_fade_start_sec={self.tag_fade_start_sec:.2f}, "
+            f"straight_assist_min_speed={self.straight_assist_min_speed:.2f}, "
+            f"straight_assist_yaw_threshold={self.straight_assist_yaw_threshold:.2f}, "
             f"max_steering_correction={self.max_steering_correction:.6f}, "
             f"encoder_units={self.encoder_units}"
         )
@@ -244,20 +263,36 @@ class CascadeTagStraighteningController(Node):
 
     def tag_callback(self, msg: PoseStamped) -> None:
         x = msg.pose.position.x
-        yaw = quat_to_yaw(
-            msg.pose.orientation.x,
-            msg.pose.orientation.y,
-            msg.pose.orientation.z,
-            msg.pose.orientation.w,
-        )
+        z = msg.pose.position.z
+
+        # For straight-driving correction, the camera frame is interpreted as:
+        #   x = left/right offset from the marker
+        #   z = forward depth to the marker
+        # The heading surrogate is therefore the bearing angle atan2(x, z).
+        z_safe = max(z, 1e-6)
+        yaw = math.atan2(x, z_safe)
 
         if self.invert_tag_x:
             x = -x
         if self.invert_tag_yaw:
             yaw = -yaw
 
-        self.tag_x = x
-        self.tag_yaw = wrap_to_pi(yaw)
+        yaw = wrap_to_pi(yaw)
+
+        # Exponential smoothing keeps one noisy frame from producing a large
+        # steering jump. The most recent filtered value is still held briefly
+        # when the camera drops out.
+        if self.last_tag_time is None:
+            self.tag_x = x
+            self.tag_z = z
+            self.tag_yaw = yaw
+        else:
+            alpha = self.camera_filter_alpha
+            self.tag_x = alpha * x + (1.0 - alpha) * self.tag_x
+            self.tag_z = alpha * z + (1.0 - alpha) * self.tag_z
+            yaw_delta = wrap_to_pi(yaw - self.tag_yaw)
+            self.tag_yaw = wrap_to_pi(self.tag_yaw + alpha * yaw_delta)
+
         self.last_tag_time = self.now_sec()
 
     def joint_callback(self, msg: JointState) -> None:
@@ -310,6 +345,29 @@ class CascadeTagStraighteningController(Node):
         self.reset_controllers()
         self.vel_control(0.0, 0.0)
 
+    def straight_assist_enabled(self) -> bool:
+        # Only apply "keep me straight" corrections when the operator is
+        # effectively asking for straight-line travel. This prevents the
+        # camera/RPM assist from fighting intentional turns.
+        return (
+            abs(self.v_cmd) >= self.straight_assist_min_speed
+            and abs(self.omega_cmd) <= self.straight_assist_yaw_threshold
+        )
+
+    def fresh_tag_available(self, t_now: float) -> bool:
+        return (
+            self.last_tag_time is not None
+            and (t_now - self.last_tag_time) <= self.tag_timeout_sec
+        )
+
+    def latch_tag_reference(self) -> None:
+        # Store the visual relationship to the tag at the beginning of a
+        # straight run. Future camera corrections are based on deviation from
+        # this remembered reference, not on trying to point directly at the tag.
+        self.tag_x_ref = self.tag_x
+        self.tag_yaw_ref = self.tag_yaw
+        self.tag_ref_valid = True
+
     def control_step(self) -> None:
         t_now = self.now_sec()
 
@@ -322,15 +380,58 @@ class CascadeTagStraighteningController(Node):
             self.stop_robot()
             return
 
-        if abs(self.left_rpm) <= self.rpm_ignore_threshold or abs(self.right_rpm) <= self.rpm_ignore_threshold:
-            e_rpm = 0.0
-        else:
-            rpm_avg = max((abs(self.left_rpm) + abs(self.right_rpm)) / 2.0, 1.0)
-            e_rpm = (self.right_rpm - self.left_rpm) / rpm_avg
-            if abs(e_rpm) < self.rpm_balance_deadband:
-                e_rpm = 0.0
+        camera_corr = 0.0
+        rpm_corr = 0.0
 
-        steering_corr = self.k_rpm_balance * e_rpm
+        straight_assist_active = self.straight_assist_enabled()
+        fresh_tag = self.fresh_tag_available(t_now)
+
+        if straight_assist_active and not self.was_straight_assist_enabled:
+            if fresh_tag:
+                self.latch_tag_reference()
+            else:
+                self.tag_ref_valid = False
+        elif not straight_assist_active:
+            self.tag_ref_valid = False
+
+        self.was_straight_assist_enabled = straight_assist_active
+
+        if straight_assist_active:
+            if fresh_tag and not self.tag_ref_valid:
+                self.latch_tag_reference()
+
+            if self.last_tag_time is not None and self.tag_ref_valid:
+                tag_age = t_now - self.last_tag_time
+                if tag_age <= self.tag_timeout_sec:
+                    e_y = self.tag_x - self.tag_x_ref
+                    e_psi = wrap_to_pi(self.tag_yaw - self.tag_yaw_ref)
+
+                    if abs(e_y) < self.lateral_deadband:
+                        e_y = 0.0
+                    if abs(e_psi) < self.heading_deadband:
+                        e_psi = 0.0
+
+                    # The AprilTag acts as a straightness reference. We first
+                    # remember the tag pose at the start of a straight run,
+                    # then correct only deviations away from that remembered
+                    # view rather than steering toward the raw tag position.
+                    camera_corr = self.k_heading * e_psi + self.k_lateral * e_y
+
+                    # Hold the last filtered camera estimate briefly, then fade
+                    # it out to zero as the tag becomes stale. Once the tag is
+                    # fully stale, straightness falls back to RPM balancing.
+                    if tag_age > self.tag_fade_start_sec:
+                        fade_window = max(self.tag_timeout_sec - self.tag_fade_start_sec, 1e-6)
+                        fade = 1.0 - ((tag_age - self.tag_fade_start_sec) / fade_window)
+                        camera_corr *= clamp(fade, 0.0, 1.0)
+
+            if abs(self.left_rpm) > self.rpm_ignore_threshold and abs(self.right_rpm) > self.rpm_ignore_threshold:
+                rpm_avg = max((abs(self.left_rpm) + abs(self.right_rpm)) / 2.0, 1.0)
+                e_rpm = (self.right_rpm - self.left_rpm) / rpm_avg
+                if abs(e_rpm) >= self.rpm_balance_deadband:
+                    rpm_corr = self.k_rpm_balance * e_rpm
+
+        steering_corr = camera_corr + rpm_corr
         steering_corr = clamp(
             steering_corr,
             -self.max_steering_correction,

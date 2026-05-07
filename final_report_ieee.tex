@@ -1,0 +1,248 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{cite}
+\usepackage{url}
+\usepackage{xcolor}
+
+\title{Design and Experimental Validation of a Discrete RPM-Balance Straightening Controller for a Differential-Drive Mobile Robot}
+
+\author{
+\IEEEauthorblockN{Your Name}
+\IEEEauthorblockA{
+ME57800 Digital Controls Final Project\\
+Purdue University\\
+Email: your-email@purdue.edu
+}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This project presents the design, implementation, and experimental evaluation of a discrete-time straightening controller for a differential-drive mobile robot. The primary objective was to improve straight-line motion in the presence of motor mismatch, wheel asymmetry, and implementation-level disturbances that caused the robot to drift when a forward command was applied. A ROS~2 controller was developed that accepts user motion commands, reads wheel encoder feedback in revolutions per minute (RPM), computes a normalized left-right wheel-speed mismatch, and applies a steering correction together with inner-loop proportional-integral (PI) wheel-speed control. The controller was implemented as a digital node that outputs serial motor commands to the robot. The design was informed by experimental logs containing wheel RPM and camera-based marker measurements. The resulting system was evaluated in terms of stability-related behavior, robustness to wheel mismatch, sampling and timing constraints, and physical testing performance. Experimental results show that feedback-based RPM balancing improves straight-line behavior relative to open-loop actuation, while also exposing practical limitations due to encoder availability, timing consistency, actuator sign conventions, and real-world disturbances.
+\end{abstract}
+
+\section{Introduction}
+Straight-line motion is a deceptively difficult task for a differential-drive mobile robot. Even when both drive motors are commanded equally, the platform may drift because of unequal wheel radii, motor gain mismatch, battery voltage variation, floor friction differences, encoder scaling errors, or mechanical alignment issues. In a practical embedded robotic system, these issues are amplified by sampling, quantization, communication delays, and imperfect sensing. As a result, a controller that is effective in theory must also be robust to implementation-level disturbances in order to perform well on hardware.
+
+Differential-drive mobile robots are widely studied because they provide a simple but representative platform for motion control, feedback design, and embedded digital implementation. Standard robot kinematic models relate the commanded body velocity and yaw rate to the left and right wheel angular velocities. However, open-loop use of this model alone is not sufficient when the two sides of the drivetrain do not respond identically. This motivates the use of feedback from wheel encoders and a digital compensator that can reject persistent mismatch.
+
+In this project, the robot was controlled through a ROS~2 software architecture in which user motion commands were received as velocity commands, encoder feedback was obtained through wheel-speed measurements, and motor commands were sent over a serial interface. The specific control objective was not full trajectory tracking, but rather improved straight-line behavior during commanded forward motion. For this reason, a practical straightening strategy based on normalized RPM mismatch was selected. The controller uses encoder RPM to estimate whether one side of the drivetrain is running faster than the other and then applies a steering correction to reduce the imbalance.
+
+Prior work in digital control establishes the importance of sampled-data design, discrete PI control, and implementation-aware analysis in embedded systems \cite{franklin,powell,astrom}. Mobile robotics literature similarly emphasizes the role of differential-drive kinematics, wheel-speed feedback, and closed-loop compensation when dealing with non-ideal hardware \cite{siegwart,corke,siciliano}. Motivated by these ideas, this project focuses on an experimentally grounded digital controller that is simple enough to implement in ROS~2, yet rich enough to highlight issues such as feedback reliability, parameter robustness, and real-time execution constraints.
+
+The main contribution of this project is the implementation and testing of a discrete RPM-balance straightening controller integrated into a ROS~2 differential-drive robot platform. The controller combines a steering correction based on wheel-speed mismatch with inner-loop PI wheel-speed regulation and is validated using physical robot data and experimental observations.
+
+\section{Problem Definition}
+The control problem is to make the mobile robot drive straighter when the user commands forward motion. In the absence of correction, the robot tends to yaw because the left and right wheels do not rotate at exactly the same speed under equal actuation. This project treats that mismatch as the dominant disturbance during straight-line operation.
+
+The system inputs and outputs are defined as follows:
+\begin{itemize}
+\item User command input: commanded linear velocity $v_{cmd}$ and angular velocity $\omega_{cmd}$.
+\item Measured feedback: left and right encoder speeds in RPM.
+\item Control output: left and right motor commands sent over serial.
+\item Main disturbance: persistent left-right drivetrain mismatch.
+\end{itemize}
+
+The performance objective is to minimize unwanted turning and wheel-speed imbalance during commanded straight motion while preserving safe and responsive robot behavior. The controller must also operate within practical digital constraints including a fixed sampling rate, finite motor command limits, measurement deadbands, and communication latency.
+
+For this project, the key feedback quantity is the normalized RPM mismatch
+\begin{equation}
+e_{rpm}[k] =
+\frac{\omega_{R,rpm}[k]-\omega_{L,rpm}[k]}
+{\max\left(\frac{|\omega_{R,rpm}[k]|+|\omega_{L,rpm}[k]|}{2},1\right)},
+\label{eq:rpm_error}
+\end{equation}
+which is used to estimate whether the robot is unintentionally steering because one wheel is effectively driving harder than the other.
+
+\section{Modeling}
+\subsection{Differential-Drive Kinematics}
+The robot is modeled as a differential-drive platform with wheel radius $r$ and track width $L$. For commanded body linear velocity $v$ and yaw rate $\omega$, the wheel-speed references are
+\begin{equation}
+\omega_L^{ref} = \frac{v-\frac{L}{2}\omega}{r},
+\qquad
+\omega_R^{ref} = \frac{v+\frac{L}{2}\omega}{r}.
+\label{eq:diffdrive}
+\end{equation}
+These equations provide the nominal relationship between body motion and wheel motion, but they do not account for real-world asymmetry between the two sides of the drivetrain.
+
+\subsection{Digital Implementation Model}
+The controller is implemented as a discrete ROS~2 node running at sampling period $T_s$. Encoder feedback is received in RPM and then converted internally to rad/s for wheel-speed PI control. This is an important implementation detail: the outer mismatch correction is naturally expressed in RPM, while the inner wheel-speed control uses angular velocity in SI units.
+
+The project implementation uses the following main internal states:
+\begin{itemize}
+\item commanded body motion $(v_{cmd}, \omega_{cmd})$
+\item measured wheel speeds $(\omega_L,\omega_R)$
+\item measured wheel RPM $(\omega_{L,rpm}, \omega_{R,rpm})$
+\item discrete PI integrator states for left and right wheels
+\end{itemize}
+
+\subsection{Practical Assumptions}
+The project assumes that encoder RPM is available frequently enough to support closed-loop control, that the drive motors respond monotonically to commanded serial values, and that the differential-drive kinematics remain valid over the low-speed operating range used in testing. The model also assumes that the dominant source of straight-line error is wheel mismatch rather than full pose-estimation drift.
+
+\section{Controller Design and Synthesis}
+\subsection{RPM-Balance Steering Correction}
+The outer correction law is based on the normalized mismatch in (\ref{eq:rpm_error}). The steering correction is
+\begin{equation}
+\omega_{corr}[k] = K_{rpm}\,e_{rpm}[k],
+\label{eq:omega_corr}
+\end{equation}
+where $K_{rpm}$ is a tunable gain. The corrected yaw-rate command becomes
+\begin{equation}
+\omega_{ref}[k] = \omega_{cmd}[k] - \omega_{corr}[k].
+\label{eq:omega_ref}
+\end{equation}
+
+This structure has a practical interpretation: if the right wheel RPM is larger than the left wheel RPM during an intended straight motion, the controller applies a compensating yaw-rate adjustment that reduces the tendency to veer.
+
+To improve robustness in hardware, the implementation includes:
+\begin{itemize}
+\item an RPM deadband, so very small mismatch values are ignored
+\item an RPM threshold, so correction is disabled when the robot is moving too slowly for the measurement to be reliable
+\item steering correction saturation, so the outer loop cannot command excessively large corrections
+\end{itemize}
+
+\subsection{Inner PI Wheel-Speed Control}
+After computing the corrected yaw-rate reference, wheel-speed references are generated using (\ref{eq:diffdrive}). The left and right wheel errors are then regulated using discrete PI controllers:
+\begin{equation}
+I[k] = I[k-1] + T_s e[k],
+\end{equation}
+\begin{equation}
+u[k] = K_p e[k] + K_i I[k] + K_{ff}r[k].
+\label{eq:pi}
+\end{equation}
+
+The implementation uses anti-windup by only accepting the integral update when the unsaturated controller output lies within the motor command bounds. This is appropriate for the robot platform because motor commands are limited and large transients can otherwise cause integrator buildup.
+
+\subsection{Implementation Architecture}
+The final controller architecture is:
+\begin{enumerate}
+\item receive user velocity command on \texttt{/cmd\_vel}
+\item read encoder wheel speeds from \texttt{/joint\_states}
+\item compute RPM mismatch and steering correction
+\item compute wheel-speed references
+\item regulate left and right wheel speeds with discrete PI loops
+\item send final commands to the motor controller over serial
+\end{enumerate}
+
+This architecture cleanly separates user intent from low-level correction: the user commands a desired motion, while the controller modifies the low-level actuation to better realize that motion on real hardware.
+
+\section{System Analysis}
+\subsection{Stability and Practical Robustness}
+The controller is a sampled-data feedback system with saturation and deadband nonlinearities. A full formal proof of nonlinear closed-loop stability is beyond the scope of this project; however, several implementation features improve practical robustness. First, both wheel PI loops are bounded by motor command saturation. Second, deadbands reduce sensitivity to encoder noise and quantization. Third, the controller includes stale-feedback timeout logic that stops the robot whenever sufficiently fresh encoder information is unavailable. In practice, these features help keep the closed-loop system bounded and safe during physical testing.
+
+\subsection{Robustness to Plant Parameter Variations}
+The proposed controller directly addresses one of the dominant plant uncertainties: unequal left-right drivetrain behavior. Variations in motor constants, friction, and wheel-ground interaction appear as wheel-speed mismatch in the encoder measurements, and the RPM-balance term acts to compensate for that mismatch. However, the controller is still sensitive to gross sign-convention errors, severe wheel slip, and unmodeled actuator dead zones.
+
+\subsection{Quantization and Sampling Effects}
+The implemented controller is digital, so encoder resolution, finite motor-command granularity, and the ROS~2 timer rate all affect performance. The encoder signals are discretized and may include small fluctuations that do not reflect meaningful physical changes. For this reason, deadbands are used both on the measured wheel speed and the wheel-speed control error. Similarly, the motor commands are sent as integers, which introduces a form of output quantization.
+
+Sampling time also matters. If the sampling period is too large, the controller reacts slowly and may allow drift to accumulate before compensating. If the feedback stream becomes intermittent, the stale-feedback monitor halts the robot rather than continuing with outdated information. This behavior is desirable from a safety standpoint, but it also highlights how digital control performance depends on sensing and timing reliability.
+
+\subsection{Comparison with a Continuous-Time View}
+At a conceptual level, the controller can be viewed as a continuous-time straightening law plus PI wheel-speed regulation. In actual implementation, however, all sensing and actuation are sampled and updated at discrete instants. Therefore, performance is not determined solely by the nominal control law, but also by the ROS~2 timer rate, communication delays, and the timing of encoder updates. This distinction is important when comparing the implemented controller with an idealized continuous-time design.
+
+\section{Experimental Validation and Discussion}
+\subsection{Experimental Setup}
+The controller was implemented on a differential-drive robot using ROS~2. User commands were provided through a velocity-command path, wheel encoder feedback was read in RPM, and motor commands were sent to the hardware over a serial interface. Additional logged data were available from marker-based experiments and tuning runs that recorded left and right wheel RPM together with camera marker information. These data were used both to guide controller tuning and to interpret experimental performance.
+
+The most relevant tuning quantities available from the project logs were left and right wheel RPM, from which normalized mismatch could be computed. This made it possible to directly tune the RPM-balance correction term for the straight-driving objective.
+
+\subsection{Recommended Result Figures}
+The final report should include the following plots:
+\begin{itemize}
+\item left and right wheel RPM versus time
+\item normalized RPM mismatch versus time
+\item commanded versus corrected yaw-rate behavior
+\item robot trajectory or marker-based lateral drift, if available
+\item open-loop versus closed-loop straight-driving comparison
+\end{itemize}
+
+Table~\ref{tab:params} provides a compact summary of the main controller parameters that should be reported.
+
+\begin{table}[t]
+\caption{Key Controller Parameters}
+\label{tab:params}
+\centering
+\begin{tabular}{>{\raggedright\arraybackslash}p{1.35in} >{\centering\arraybackslash}p{0.75in}}
+\toprule
+Parameter & Value \\
+\midrule
+Control frequency & 30 Hz \\
+Encoder units & RPM \\
+Wheel radius $r$ & 0.05 m \\
+Track width $L$ & 0.28 m \\
+$K_{rpm}$ & 1.346468 \\
+RPM deadband & 0.005353 \\
+RPM ignore threshold & 5.0 RPM \\
+Motor command limit & 3000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Why the Controller Worked or Did Not Work}
+This is the most important discussion point in the project. The controller worked when the encoder feedback was available, correctly signed, and sufficiently frequent to support the digital feedback loop. Under those conditions, the RPM-balance term reduced persistent left-right wheel mismatch, and the inner PI loops helped the wheel speeds follow their references more consistently than open-loop motor actuation.
+
+The controller may fail or underperform for several practical reasons:
+\begin{itemize}
+\item stale or missing encoder feedback prevents the controller from updating safely
+\item incorrect sign conventions for encoders or motors can make the correction act in the wrong direction
+\item low-speed operation may fall into the deadband or ignore threshold region, reducing correction authority
+\item actuator saturation limits how much mismatch can be corrected
+\item quantization and irregular sampling may cause noisy or delayed corrections
+\item wheel slip and floor interaction can produce drift that is not fully observable through RPM mismatch alone
+\end{itemize}
+
+In particular, if the controller reports stale wheel feedback and stops the robot, that is not evidence that the control law itself is unstable; rather, it indicates that the digital feedback path is incomplete or not updating quickly enough. This distinction is important in experimental digital control: a theoretically reasonable control law still depends on correct sensing, timing, and implementation infrastructure.
+
+\subsection{Placeholders for Final Experimental Conclusions}
+Replace the following placeholders with your measured observations from the final trials:
+\begin{itemize}
+\item \textbf{Open-loop drift:} [Insert measured or qualitative baseline behavior.]
+\item \textbf{Closed-loop improvement:} [Insert how much straighter the robot drove.]
+\item \textbf{RPM mismatch reduction:} [Insert plot-based or numerical comparison.]
+\item \textbf{Observed limitation:} [Insert the main implementation bottleneck.]
+\end{itemize}
+
+A concise discussion sentence you can customize is:
+\begin{quote}
+The controller improved straight-line motion because it used wheel-speed feedback to compensate for persistent drivetrain asymmetry; however, its performance was limited by [encoder timing / motor sign convention / wheel slip / sensing interruptions].
+\end{quote}
+
+\section{Conclusion}
+This project developed a discrete straightening controller for a differential-drive mobile robot using ROS~2, wheel encoder RPM feedback, and serial motor actuation. The controller combined an RPM-balance steering correction with inner PI wheel-speed regulation, making it suitable for correcting practical left-right drivetrain mismatch during commanded straight motion. The design was informed by experimental logs and implemented directly on hardware.
+
+The project demonstrates that even a relatively simple feedback structure can improve straight-line behavior compared with open-loop actuation, provided that encoder signals are available and correctly interpreted. At the same time, the experiments emphasize that digital control success depends not only on the control equations, but also on sensing reliability, sampling consistency, and correct actuator sign conventions. Future work should include cleaner experimental comparison against open-loop control, publication of diagnostic signals for online monitoring, and possible reintegration of camera-based correction for combined vision and encoder feedback.
+
+\begin{thebibliography}{99}
+
+\bibitem{franklin}
+G. F. Franklin, J. D. Powell, and M. L. Workman, \emph{Digital Control of Dynamic Systems}, 3rd ed. Menlo Park, CA, USA: Addison-Wesley, 1998.
+
+\bibitem{powell}
+K. J. {\AA}str\"om and R. M. Murray, \emph{Feedback Systems: An Introduction for Scientists and Engineers}. Princeton, NJ, USA: Princeton Univ. Press, 2008.
+
+\bibitem{astrom}
+K. J. {\AA}str\"om and T. H\"agglund, \emph{Advanced PID Control}. Research Triangle Park, NC, USA: ISA, 2006.
+
+\bibitem{siegwart}
+R. Siegwart, I. R. Nourbakhsh, and D. Scaramuzza, \emph{Introduction to Autonomous Mobile Robots}, 2nd ed. Cambridge, MA, USA: MIT Press, 2011.
+
+\bibitem{corke}
+P. Corke, \emph{Robotics, Vision and Control: Fundamental Algorithms in MATLAB}, 2nd ed. Cham, Switzerland: Springer, 2017.
+
+\bibitem{siciliano}
+B. Siciliano and O. Khatib, Eds., \emph{Springer Handbook of Robotics}, 2nd ed. Cham, Switzerland: Springer, 2016.
+
+\bibitem{ros2}
+M. Quigley, K. Conley, B. Gerkey, \emph{et al.}, ``ROS: an open-source Robot Operating System,'' in \emph{Proc. ICRA Workshop on Open Source Software}, Kobe, Japan, 2009.
+
+\end{thebibliography}
+
+\end{document}
