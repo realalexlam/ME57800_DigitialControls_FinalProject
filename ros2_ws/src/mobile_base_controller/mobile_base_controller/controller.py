@@ -96,7 +96,9 @@ class CascadeTagStraighteningController(Node):
         self.declare_parameter("k_rpm_balance", 1.346468)
         self.declare_parameter("rpm_balance_deadband", 0.005353)
         self.declare_parameter("rpm_ignore_threshold", 5.0)
-        self.declare_parameter("encoder_units", "rad_s")
+        # Incoming /joint_states velocity values for this robot are RPM.
+        self.declare_parameter("encoder_units", "rpm")
+        # Inner-loop deadbands stay in rad/s because PI control uses rad/s.
         self.declare_parameter("encoder_deadband", 0.05)
         self.declare_parameter("wheel_error_deadband", 0.05)
         self.declare_parameter("motor_cmd_deadband", 20.0)
@@ -187,6 +189,9 @@ class CascadeTagStraighteningController(Node):
             f"rpm_ignore_threshold={self.rpm_ignore_threshold:.1f}, "
             f"max_steering_correction={self.max_steering_correction:.6f}, "
             f"encoder_units={self.encoder_units}"
+        )
+        self.get_logger().info(
+            "Wheel feedback is converted to rad/s internally for PI control."
         )
 
     def now_sec(self) -> float:
