@@ -14,6 +14,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 class SimpleArucoTracker(Node):
     def __init__(self):
         super().__init__('simple_aruco_tracker')
+        self.target_marker_id = 1
         
         video_qos = QoSProfile(
             depth=1,
@@ -74,6 +75,8 @@ class SimpleArucoTracker(Node):
             if ids is not None and len(ids) > 0:
                 for i in range(len(ids)):
                     marker_id = ids[i][0]
+                    if marker_id != self.target_marker_id:
+                        continue
                     corner_points = corners[i][0]
                     
                     success, rvec, tvec = cv2.solvePnP(
