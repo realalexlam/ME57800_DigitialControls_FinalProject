@@ -1,0 +1,23 @@
+running egg_info
+writing ../../build/mobile_base_controller/mobile_base_controller.egg-info/PKG-INFO
+writing dependency_links to ../../build/mobile_base_controller/mobile_base_controller.egg-info/dependency_links.txt
+writing entry points to ../../build/mobile_base_controller/mobile_base_controller.egg-info/entry_points.txt
+writing requirements to ../../build/mobile_base_controller/mobile_base_controller.egg-info/requires.txt
+writing top-level names to ../../build/mobile_base_controller/mobile_base_controller.egg-info/top_level.txt
+reading manifest file '../../build/mobile_base_controller/mobile_base_controller.egg-info/SOURCES.txt'
+writing manifest file '../../build/mobile_base_controller/mobile_base_controller.egg-info/SOURCES.txt'
+running build
+running build_py
+copying mobile_base_controller/simple_tracker.py -> /home/lamm-robot/ros2_ws/build/mobile_base_controller/build/lib/mobile_base_controller
+running install
+running install_lib
+copying /home/lamm-robot/ros2_ws/build/mobile_base_controller/build/lib/mobile_base_controller/simple_tracker.py -> /home/lamm-robot/ros2_ws/install/mobile_base_controller/lib/python3.12/site-packages/mobile_base_controller
+byte-compiling /home/lamm-robot/ros2_ws/install/mobile_base_controller/lib/python3.12/site-packages/mobile_base_controller/simple_tracker.py to simple_tracker.cpython-312.pyc
+running install_data
+running install_egg_info
+removing '/home/lamm-robot/ros2_ws/install/mobile_base_controller/lib/python3.12/site-packages/mobile_base_controller-0.0.0-py3.12.egg-info' (and everything under it)
+Copying ../../build/mobile_base_controller/mobile_base_controller.egg-info to /home/lamm-robot/ros2_ws/install/mobile_base_controller/lib/python3.12/site-packages/mobile_base_controller-0.0.0-py3.12.egg-info
+running install_scripts
+Installing motor_driver script to /home/lamm-robot/ros2_ws/install/mobile_base_controller/lib/mobile_base_controller
+Installing simple_tracker script to /home/lamm-robot/ros2_ws/install/mobile_base_controller/lib/mobile_base_controller
+writing list of installed files to '/home/lamm-robot/ros2_ws/build/mobile_base_controller/install.log'

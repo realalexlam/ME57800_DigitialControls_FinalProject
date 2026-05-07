@@ -8,8 +8,14 @@ setup.py
 ../../build/mobile_base_controller/mobile_base_controller.egg-info/requires.txt
 ../../build/mobile_base_controller/mobile_base_controller.egg-info/top_level.txt
 ../../build/mobile_base_controller/mobile_base_controller.egg-info/zip-safe
+mobile_base_controller/System_Camera.py
 mobile_base_controller/__init__.py
+mobile_base_controller/alchemist_core.py
+mobile_base_controller/aruco_tracker.py
+mobile_base_controller/controller.py
+mobile_base_controller/marker_detector.py
 mobile_base_controller/motor_driver.py
+mobile_base_controller/simple_tracker.py
 resource/mobile_base_controller
 test/test_copyright.py
 test/test_flake8.py

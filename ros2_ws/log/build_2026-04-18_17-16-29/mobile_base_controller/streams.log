@@ -1,0 +1,25 @@
+[0.402s] Invoking command in '/home/lamm-robot/ros2_ws/src/mobile_base_controller': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/lamm-robot/ros2_ws/build/mobile_base_controller/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/lamm-robot/ros2_ws/install/mobile_base_controller/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/mobile_base_controller build --build-base /home/lamm-robot/ros2_ws/build/mobile_base_controller/build install --record /home/lamm-robot/ros2_ws/build/mobile_base_controller/install.log --single-version-externally-managed install_data
+[0.529s] running egg_info
+[0.536s] writing ../../build/mobile_base_controller/mobile_base_controller.egg-info/PKG-INFO
+[0.536s] writing dependency_links to ../../build/mobile_base_controller/mobile_base_controller.egg-info/dependency_links.txt
+[0.536s] writing entry points to ../../build/mobile_base_controller/mobile_base_controller.egg-info/entry_points.txt
+[0.537s] writing requirements to ../../build/mobile_base_controller/mobile_base_controller.egg-info/requires.txt
+[0.537s] writing top-level names to ../../build/mobile_base_controller/mobile_base_controller.egg-info/top_level.txt
+[0.552s] reading manifest file '../../build/mobile_base_controller/mobile_base_controller.egg-info/SOURCES.txt'
+[0.552s] writing manifest file '../../build/mobile_base_controller/mobile_base_controller.egg-info/SOURCES.txt'
+[0.553s] running build
+[0.553s] running build_py
+[0.553s] copying mobile_base_controller/simple_tracker.py -> /home/lamm-robot/ros2_ws/build/mobile_base_controller/build/lib/mobile_base_controller
+[0.553s] running install
+[0.555s] running install_lib
+[0.563s] copying /home/lamm-robot/ros2_ws/build/mobile_base_controller/build/lib/mobile_base_controller/simple_tracker.py -> /home/lamm-robot/ros2_ws/install/mobile_base_controller/lib/python3.12/site-packages/mobile_base_controller
+[0.563s] byte-compiling /home/lamm-robot/ros2_ws/install/mobile_base_controller/lib/python3.12/site-packages/mobile_base_controller/simple_tracker.py to simple_tracker.cpython-312.pyc
+[0.564s] running install_data
+[0.564s] running install_egg_info
+[0.572s] removing '/home/lamm-robot/ros2_ws/install/mobile_base_controller/lib/python3.12/site-packages/mobile_base_controller-0.0.0-py3.12.egg-info' (and everything under it)
+[0.572s] Copying ../../build/mobile_base_controller/mobile_base_controller.egg-info to /home/lamm-robot/ros2_ws/install/mobile_base_controller/lib/python3.12/site-packages/mobile_base_controller-0.0.0-py3.12.egg-info
+[0.572s] running install_scripts
+[0.628s] Installing motor_driver script to /home/lamm-robot/ros2_ws/install/mobile_base_controller/lib/mobile_base_controller
+[0.629s] Installing simple_tracker script to /home/lamm-robot/ros2_ws/install/mobile_base_controller/lib/mobile_base_controller
+[0.629s] writing list of installed files to '/home/lamm-robot/ros2_ws/build/mobile_base_controller/install.log'
+[0.642s] Invoked command in '/home/lamm-robot/ros2_ws/src/mobile_base_controller' returned '0': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/lamm-robot/ros2_ws/build/mobile_base_controller/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/lamm-robot/ros2_ws/install/mobile_base_controller/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/mobile_base_controller build --build-base /home/lamm-robot/ros2_ws/build/mobile_base_controller/build install --record /home/lamm-robot/ros2_ws/build/mobile_base_controller/install.log --single-version-externally-managed install_data

@@ -1,2 +1,5 @@
 [console_scripts]
+alchemist_core = mobile_base_controller.alchemist_core:main
+controller = mobile_base_controller.controller:main
 motor_driver = mobile_base_controller.motor_driver:main
+simple_tracker = mobile_base_controller.simple_tracker:main
