@@ -28,6 +28,7 @@ setup(
             'simple_tracker = mobile_base_controller.simple_tracker:main',
             'alchemist_core = mobile_base_controller.alchemist_core:main',
             'controller = mobile_base_controller.controller:main',
+            'rpm_only_controller = mobile_base_controller.rpm_only_controller:main',
         ],
     },
 )
